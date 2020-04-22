@@ -40,7 +40,7 @@ const (
 
 // playGauge continuously changes the displayed percent value on the gauge by the
 // step once every delay. Exits when the context expires.
-func playGauge(ctx context.Context, g *gauge.Gauge, gpuData *Resources, delay time.Duration, pt playType) {
+func playGauge(ctx context.Context, g *gauge.Gauge, val *uint, delay time.Duration, pt playType) {
 	ticker := time.NewTicker(delay)
 	defer ticker.Stop()
 	for {
@@ -48,11 +48,11 @@ func playGauge(ctx context.Context, g *gauge.Gauge, gpuData *Resources, delay ti
 		case <-ticker.C:
 			switch pt {
 			case playTypePercent:
-				if err := g.Percent(int(gpuData.GPUUtil)); err != nil {
+				if err := g.Percent(int(*val)); err != nil {
 					panic(err)
 				}
 			case playTypeAbsolute:
-				if err := g.Absolute(int(gpuData.GPUUtil), 100); err != nil {
+				if err := g.Absolute(int(*val), 100); err != nil {
 					panic(err)
 				}
 			}
@@ -143,31 +143,75 @@ func main() {
 
 	var totalGPUValues = Resources{}
 
+	// gpu data refresh
 	go updateValues(&totalGPUValues, devices, count, delayTime)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	withLabel, err := gauge.New(
-		gauge.Height(3),
-		gauge.TextLabel("GPU Usage"),
-		gauge.Color(cell.ColorRed),
-		gauge.FilledTextColor(cell.ColorBlack),
-		gauge.EmptyTextColor(cell.ColorYellow),
-	)
-	if err != nil {
-		panic(err)
+	titles := []string{
+		"GPU Usage",
+		"Decoder Usage",
+		"Encoder Usage",
 	}
-	go playGauge(ctx, withLabel, &totalGPUValues, delayTime, playTypePercent)
+	titValues := []*uint{
+		&totalGPUValues.GPUUtil,
+		&totalGPUValues.DecUtil,
+		&totalGPUValues.EncUtil,
+	}
 
+	// gauge setup and deploy
+	var gauges []*gauge.Gauge
+	ctx, cancel := context.WithCancel(context.Background())
+	for i := range titles {
+		withLabel, err := gauge.New(
+			gauge.Height(3),
+			gauge.TextLabel(titles[i]),
+			gauge.Color(cell.ColorRed),
+			gauge.FilledTextColor(cell.ColorBlack),
+			gauge.EmptyTextColor(cell.ColorYellow),
+		)
+		if err != nil {
+			panic(err)
+		}
+		gauges = append(gauges, withLabel)
+	}
+	for i := range gauges {
+		gaugeAddr := titValues[i]
+		go playGauge(ctx, gauges[i], gaugeAddr, delayTime, playTypePercent)
+	}
+
+	// Container layout config
 	c, err := container.New(
 		t,
-		container.SplitVertical(
-			container.Left(
-				container.Border(linestyle.Light),
-				container.BorderTitle("PRESS Q TO QUIT"),
+		container.SplitHorizontal(
+			container.Top(
+				container.SplitVertical(
+					container.Left(
+						container.Border(linestyle.Light),
+						container.BorderTitle("PRESS Q TO QUIT"),
+						container.SplitHorizontal(
+							container.Top(
+								container.PlaceWidget(gauges[0]),
+							),
+							container.Bottom(
+								container.SplitHorizontal(
+									container.Top(
+										container.PlaceWidget(gauges[1]),
+									),
+									container.Bottom(
+										container.PlaceWidget(gauges[2]),
+									),
+								),
+							),
+							container.SplitPercent(33),
+						),
+					),
+					container.Right(
+						container.Border(linestyle.Light),
+						container.BorderTitle("EEEEEEEEEEEEEE"),
+					),
+				),
 			),
-			container.Right(
-				container.PlaceWidget(withLabel),
-			),
+			container.Bottom(),
+			container.SplitPercent(40),
 		),
 	)
 
